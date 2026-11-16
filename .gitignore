@@ -1,0 +1,6 @@
+
+enterprise-ai-knowledge-assistant/monitoring/data/
+enterprise-ai-knowledge-assistant/storage/uploads/*
+enterprise-ai-knowledge-assistant/storage/processed/*
+enterprise-ai-knowledge-assistant/.env
+.env

@@ -1,10 +1,10 @@
-
+import os
 import uuid
 
 from qdrant_client import QdrantClient, models
 
-QDRANT_URL = "http://localhost:6335"
-COLLECTION_NAME = "enterprise_documents"
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6337")
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "enterprise_documents")
 VECTOR_SIZE = 384
 client = QdrantClient(
     url=QDRANT_URL

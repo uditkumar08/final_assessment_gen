@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+pydantic
+qdrant-client
+pymupdf
+sentence-transformers
+langchain-core
+langchain-groq
+prometheus-fastapi-instrumentator
