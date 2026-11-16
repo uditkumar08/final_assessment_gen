@@ -18,7 +18,7 @@ spec:
       containers:
         - name: backend
           image: ghcr.io/uditkumar08/final_assessment_gen-backend:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8000
@@ -26,7 +26,7 @@ spec:
             - name: QDRANT_URL
               value: http://qdrant:6333
             - name: GROQ_MODEL
-              value: llama-3.3-70b-versatile
+              value: openai/gpt-oss-120b
             - name: GROQ_API_KEY
               valueFrom:
                 secretKeyRef:

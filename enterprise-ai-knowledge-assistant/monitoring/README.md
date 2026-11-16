@@ -2,6 +2,8 @@
 
 Prometheus collects app metrics, Grafana displays metrics and logs, and Loki stores logs. A ServiceMonitor is a Kubernetes resource that tells Prometheus Operator which service to scrape.
 
+This guide covers the Kubernetes monitoring stack. The standalone Prometheus service in Docker Compose is available at <http://localhost:9091>; the Kubernetes Prometheus port-forward below uses port 9090.
+
 ## Install the monitoring stack
 
 These commands change Helm configuration and install resources into the Kubernetes cluster. Run them only after approving the install. If Helm was installed under `%LOCALAPPDATA%\Programs\Helm` and is not on `PATH`, add it to the current PowerShell session:
@@ -32,15 +34,10 @@ The GitHub Actions deploy job applies this file automatically when the CRD is av
 Run each port-forward in a separate PowerShell window and leave it running.
 
 ```powershell
-kubectl port-forward -n monitoring svc/monitoring-grafana 3000:80
+kubectl port-forward -n monitoring svc/monitoring-grafana 3001:80
 ```
 
-Open Grafana at <http://localhost:3000>. Sign in as `admin`. To retrieve the generated password in PowerShell:
-
-```powershell
-$encoded = kubectl get secret monitoring-grafana -n monitoring -o 'jsonpath={.data.admin-password}'
-[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
-```
+Open Grafana at <http://localhost:3001> and sign in with the credentials stored in the `monitoring-grafana` Secret. Do not print the password or place it in a command, manifest, or repository file.
 
 Forward Prometheus in another window:
 
@@ -56,15 +53,46 @@ kubectl port-forward -n default svc/frontend-service 8501:8501
 
 Then open <http://localhost:8501>.
 
-## Configure Loki in Grafana
+## Import the backend dashboard
 
-In Grafana, go to **Connections > Data sources > Add data source > Loki** and set the URL to:
+The ready-to-import dashboard is [`grafana-dashboard.json`](./grafana-dashboard.json). In Grafana, select **Dashboards > New > Import**, choose **Upload JSON file**, select this file, then choose the Prometheus and Loki data sources from the dashboard variables and click **Import**. The dashboard uses datasource variables, so it is not tied to one Grafana instance's datasource UIDs.
+
+The dashboard has panels for backend availability, request total/rate, p95 latency, 5xx rate, backend memory, and backend/frontend logs. The memory query uses the empty `container` label returned by Minikube's pod-level `container_memory_working_set_bytes` series. The 5xx panel displays zero until an error series exists.
+
+To confirm the scrape target, open Prometheus at <http://localhost:9090>, select **Status > Targets**, and check that `backend-service` is **UP**. In the Prometheus query page, run:
+
+```promql
+up{job=~".*backend.*"}
+```
+
+Forward the backend service in another PowerShell window:
+
+```powershell
+kubectl port-forward -n default svc/backend-service 18000:8000
+```
+
+For backend metrics, open <http://localhost:18000/metrics>. To create sample metrics without uploading a document, use this PowerShell loop:
+
+```powershell
+1..15 | ForEach-Object {
+  Invoke-WebRequest -UseBasicParsing http://localhost:18000/health | Out-Null
+  Invoke-WebRequest -UseBasicParsing http://localhost:18000/ | Out-Null
+}
+```
+
+Both requests are read-only and do not upload or process documents. The root route currently returns HTTP 200.
+
+## Grafana dashboard and Loki logs
+
+Applying `k8s/grafana-datasource.yaml` provisions the **Enterprise Loki** data source, and `k8s/grafana-dashboard.yaml` provisions the **Enterprise AI Knowledge Assistant** dashboard. The separate importable `grafana-dashboard.json` provides request totals/rates, p95 latency, 5xx rate, backend availability and memory, plus backend/frontend logs. The importable dashboard lets you choose Prometheus and Loki data sources from variables.
+
+The Loki service is available to Grafana inside the cluster at:
 
 ```text
 http://loki.monitoring.svc.cluster.local:3100
 ```
 
-Save and test the data source.
+In Grafana, open **Dashboards > Enterprise AI Knowledge Assistant**. To explore logs directly, select the **Enterprise Loki** data source in **Explore** and query:
 
 ## Example queries
 
@@ -90,5 +118,30 @@ histogram_quantile(
 Backend logs:
 
 ```logql
-{app="backend"}
+{app="backend", namespace="default"}
+```
+
+Frontend logs:
+
+```logql
+{app="frontend", namespace="default"}
+```
+
+For a direct Loki API check, forward the service:
+
+```powershell
+kubectl port-forward -n monitoring svc/loki 3100:3100
+```
+
+Then count recent backend log streams without printing log contents:
+
+```powershell
+$selector = [uri]::EscapeDataString('{app="backend",namespace="default"}')
+$end = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$start = $end - 3600
+$result = Invoke-RestMethod "http://localhost:3100/loki/api/v1/query_range?query=$selector&start=$start&end=$end&limit=5"
+"Backend log streams: $($result.data.result.Count)"
+```
+
+In Grafana, **Explore > Enterprise Loki > Label browser** shows available labels. Loki stores logs, while Prometheus stores numeric metrics; a log panel stays empty until the matching pod emits logs.
 ```

@@ -18,7 +18,7 @@ spec:
       containers:
         - name: frontend
           image: ghcr.io/uditkumar08/final_assessment_gen-frontend:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8501

@@ -42,9 +42,9 @@ Create `.env` from the example if needed, then set `GROQ_API_KEY` to your own ke
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Keep `.env` private and do not commit it. The model used by the app is `llama-3.3-70b-versatile`. The backend container uses the internal Qdrant address `http://qdrant:6333`; from Windows, Qdrant is available at `http://localhost:6337`.
+Keep `.env` private and do not commit it. The model used by the app is `openai/gpt-oss-120b`. The backend container uses the internal Qdrant address `http://qdrant:6333`; from Windows, Qdrant is available at `http://localhost:6337`.
 
-Build and start the three services:
+Build and start the app and monitoring services:
 
 ```powershell
 docker compose up -d --build
@@ -59,15 +59,16 @@ Open the app and service endpoints:
 | FastAPI docs | [http://localhost:8000/docs](http://localhost:8000/docs) |
 | FastAPI health | [http://localhost:8000/health](http://localhost:8000/health) |
 | Qdrant REST API | [http://localhost:6337](http://localhost:6337) |
+| Prometheus | [http://localhost:9091](http://localhost:9091) |
 
-Compose maps host ports `8502`, `8000`, and `6337` to container ports `8501`, `8000`, and `6333`. Within the Compose network, the frontend talks to `http://backend:8000` and the backend talks to `http://qdrant:6333`.
+Compose maps host ports `8502`, `8000`, `6337`, and `9091` to container ports `8501`, `8000`, `6333`, and `9090`. Within the Compose network, the frontend talks to `http://backend:8000`, the backend talks to `http://qdrant:6333`, and Prometheus scrapes `http://backend:8000/metrics`.
 
 The relevant environment settings are:
 
 | Variable | Value or use |
 | --- | --- |
 | `GROQ_API_KEY` | Required; read from `.env`. Never put the key in a manifest or commit it. |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` |
 | `QDRANT_URL` | Host default: `http://localhost:6337`; Compose and Kubernetes use the internal `qdrant:6333` service address. |
 | `QDRANT_COLLECTION` | `enterprise_documents` |
 | `API_BASE_URL` | Compose sets `http://backend:8000`; Kubernetes sets `http://backend-service:8000`. The local frontend default is `http://127.0.0.1:8000`. |
@@ -119,25 +120,37 @@ The chat response includes the question, document ID, answer, and a `sources` li
 
 The app's Kubernetes resources use the `default` namespace. Qdrant is exposed inside the cluster as `qdrant:6333`; the backend and frontend use `backend-service:8000` and `frontend-service:8501`.
 
-Before deploying, create the `app-secrets` Kubernetes Secret with the `GROQ_API_KEY` key, and make sure the GHCR backend/frontend packages are public. The GitHub Actions workflow builds images on pushes to `main` and deploys through the self-hosted runner.
-
-The app manifests can be applied with:
+Before deploying, ensure the `app-secrets` Secret exists in `default` with a `GROQ_API_KEY` entry. The key must not be added to a manifest or committed. For a local Minikube deployment, build and load the Docker images:
 
 ```powershell
-kubectl apply -f k8s/qdrant.yaml -f k8s/backend.yaml -f k8s/frontend.yaml
+docker compose build backend frontend
+docker tag enterprise-ai-knowledge-assistant-backend:latest ghcr.io/uditkumar08/final_assessment_gen-backend:latest
+docker tag enterprise-ai-knowledge-assistant-frontend:latest ghcr.io/uditkumar08/final_assessment_gen-frontend:latest
+minikube image load ghcr.io/uditkumar08/final_assessment_gen-backend:latest
+minikube image load ghcr.io/uditkumar08/final_assessment_gen-frontend:latest
 ```
 
-After installing the monitoring charts, apply the backend ServiceMonitor:
+Apply the app and Grafana resources, then wait for the rollouts:
 
 ```powershell
+kubectl apply -f k8s/qdrant.yaml -f k8s/backend.yaml -f k8s/frontend.yaml -f k8s/grafana-dashboard.yaml -f k8s/grafana-datasource.yaml
 kubectl apply -f k8s/servicemonitor.yaml
+kubectl rollout status deployment/qdrant --namespace default --timeout=180s
+kubectl rollout status deployment/backend --namespace default --timeout=300s
+kubectl rollout status deployment/frontend --namespace default --timeout=180s
 ```
 
-Forward the UI to your computer:
+The CI workflow builds and publishes the same GHCR image names on pushes to `main`, deploys the manifests on the self-hosted runner, and skips the ServiceMonitor only when its CRD is not installed.
+
+Forward the app and dashboards from separate PowerShell windows:
 
 ```powershell
 kubectl port-forward --namespace default svc/frontend-service 8501:8501
+kubectl port-forward --namespace monitoring svc/monitoring-grafana 3001:80
+kubectl port-forward --namespace monitoring svc/monitoring-kube-prometheus-prometheus 9090:9090
 ```
+
+Open the app at [http://localhost:8501](http://localhost:8501) and Grafana at [http://localhost:3001](http://localhost:3001). Grafana discovers the **Enterprise AI Knowledge Assistant** dashboard from its labeled ConfigMap. It includes backend request rate, p95 latency, status codes, health, and Loki logs. Grafana's preinstalled Kubernetes dashboards remain available as well.
 
 For Prometheus, Grafana, Loki, dashboards, and queries, see [monitoring/README.md](./monitoring/README.md).
 
