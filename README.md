@@ -4,6 +4,8 @@ Ask questions about a PDF and get answers grounded in that document, with page r
 
 This guide is written for someone setting up the project for the first time on Windows. You do not need to know how AI works to try it.
 
+This README is at the repository root. The application files are in the `enterprise-ai-knowledge-assistant` subfolder. Follow the first setup step below before running the project commands.
+
 ## What does this project do?
 
 Reading a long document to find one detail can take time. This app lets you upload a PDF and ask questions in plain language, such as:
@@ -27,31 +29,105 @@ If relevant text cannot be found, the assistant is instructed to say so rather t
 - Windows 10 or 11 with Docker Desktop
 - A Groq API key and a supported Groq model
 - An internet connection to download images and the embedding model and to call Groq
+- For the optional local Python setup: Python 3.12
+
+## Folder structure
+
+The repository root contains this README. The application project is in `enterprise-ai-knowledge-assistant`; commands in this guide are run from that project folder.
+
+```text
+repository-root/
+├── README.md
+└── enterprise-ai-knowledge-assistant/
+    ├── backend/
+    │   └── app/
+    │       ├── api/                 # FastAPI document and chat endpoints
+    │       ├── services/            # PDF extraction, chunking, embeddings, Qdrant, RAG
+    │       └── main.py              # FastAPI application and health/metrics routes
+    ├── frontend/
+    │   └── ui_app.py                # Streamlit upload and chat interface
+    ├── k8s/                         # Kubernetes Deployments, Services, and monitoring resources
+    ├── monitoring/
+    │   ├── grafana-dashboard.json   # Importable Grafana dashboard
+    │   ├── prometheus.yml           # Prometheus scrape configuration for Compose
+    │   └── README.md                # Grafana, Prometheus, and Loki setup
+    ├── storage/
+    │   ├── uploads/                 # Uploaded PDFs (runtime data)
+    │   └── processed/               # Extracted text and chunk JSON (runtime data)
+    ├── .github/workflows/
+    │   └── ci-cd.yml                # Lint, build, publish, and optional cluster deployment
+    ├── .dockerignore                # Files excluded from Docker build contexts
+    ├── .env.example                 # Safe environment-variable template
+    ├── docker-compose.yml           # Local multi-service application
+    ├── Dockerfile.backend           # CPU-only, multi-stage FastAPI image
+    ├── Dockerfile.frontend          # Streamlit image
+    ├── requirements-backend.txt     # Backend Python dependencies
+    ├── requirements-frontend.txt    # Frontend Python dependencies
+    └── ruff.toml                    # Python lint configuration
+```
+
+The paths in the folder map and the commands below are relative to `enterprise-ai-knowledge-assistant`. The `storage` folders are created or populated while the app runs. Do not put API keys or other secrets in source files.
+
+## Dependencies
+
+Docker Compose installs the Python dependencies into separate backend and frontend images. You do not need to install Python packages on Windows to use the recommended Docker setup.
+
+| Dependency file or service | Main components | Purpose |
+| --- | --- | --- |
+| `requirements-backend.txt` | FastAPI, Uvicorn, Pydantic, `python-multipart` | HTTP API, request validation, and PDF uploads |
+| `requirements-backend.txt` | PyMuPDF | Extracts text and page numbers from text-based PDFs |
+| `requirements-backend.txt` | Sentence Transformers and PyTorch | Creates local text embeddings using `all-MiniLM-L6-v2` |
+| `requirements-backend.txt` | `qdrant-client` | Stores and searches vector embeddings |
+| `requirements-backend.txt` | LangChain Core and LangChain Groq | Sends retrieved document passages to the configured Groq model |
+| `requirements-backend.txt` | Prometheus FastAPI Instrumentator | Exposes API metrics at `/metrics` |
+| `requirements-frontend.txt` | Streamlit and Requests | Web interface and calls to the FastAPI backend |
+| Docker Compose | Qdrant and Prometheus | Local vector database and metrics collection |
+| Kubernetes monitoring stack | Prometheus, Grafana, Loki, and Promtail | Cluster metrics, dashboards, and centralized logs; setup is in [monitoring/README.md](./enterprise-ai-knowledge-assistant/monitoring/README.md) |
+
+The backend Dockerfile installs the CPU build of PyTorch so the backend does not need a CUDA-enabled GPU image. The first backend start downloads the embedding model; allow time for that download.
 
 ## Run with Docker Compose
 
-From the repository folder, open PowerShell and enter:
+### 1. Open the application project folder
+
+From the repository root, enter the application subfolder:
 
 ```powershell
-cd .\enterprise-ai-knowledge-assistant
+Set-Location .\enterprise-ai-knowledge-assistant
+Get-Location
+Test-Path .\docker-compose.yml
 ```
 
-Create `.env` from the example if needed, then set `GROQ_API_KEY` to your own key:
+The final command should return `True`. If it returns `False`, check that you changed into the application project folder before continuing.
+
+### 2. Configure the Groq API key
+
+Create `.env` from the example once, then open `.env` in an editor and replace the example value with your own Groq API key:
 
 ```powershell
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Keep `.env` private and do not commit it. The model used by the app is `openai/gpt-oss-120b`. The backend container uses the internal Qdrant address `http://qdrant:6333`; from Windows, Qdrant is available at `http://localhost:6337`.
+Keep `.env` private and do not commit it. The configured model is `openai/gpt-oss-120b`. Do not paste the key into chat, screenshots, or source code.
 
-Build and start the app and monitoring services:
+### 3. Build and start the services
+
+Docker Desktop must be running. This command builds the backend and frontend images, downloads the required service images, and starts the app and Prometheus:
 
 ```powershell
 docker compose up -d --build
 docker compose ps
 ```
 
-Open the app and service endpoints:
+The first build and first backend start can take several minutes while packages, container images, and the embedding model are downloaded. Check startup output with:
+
+```powershell
+docker compose logs -f backend
+```
+
+Press `Ctrl+C` to stop viewing logs; this does not stop the containers.
+
+### 4. Open and test the app
 
 | Service | Address |
 | --- | --- |
@@ -63,6 +139,14 @@ Open the app and service endpoints:
 
 Compose maps host ports `8502`, `8000`, `6337`, and `9091` to container ports `8501`, `8000`, `6333`, and `9090`. Within the Compose network, the frontend talks to `http://backend:8000`, the backend talks to `http://qdrant:6333`, and Prometheus scrapes `http://backend:8000/metrics`.
 
+Check that the API is healthy from PowerShell:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+```
+
+In the Streamlit page, select a text-based PDF and choose **Upload and Start Chat**. After indexing completes, ask a question and expand **View Sources** to see page citations. Scanned/image-only documents need OCR, which this project does not currently implement.
+
 The relevant environment settings are:
 
 | Variable | Value or use |
@@ -73,7 +157,7 @@ The relevant environment settings are:
 | `QDRANT_COLLECTION` | `enterprise_documents` |
 | `API_BASE_URL` | Compose sets `http://backend:8000`; Kubernetes sets `http://backend-service:8000`. The local frontend default is `http://127.0.0.1:8000`. |
 
-Choose a PDF in the app and select **Upload and Start Chat**. After processing finishes, ask a question and expand **View Sources** to see source page numbers. Uploads are limited to one PDF at a time, up to 10 MB; scanned image-only PDFs are not OCR-processed.
+Uploads are limited to one PDF at a time, up to 10 MB.
 
 Stop the services with:
 
@@ -81,7 +165,43 @@ Stop the services with:
 docker compose down
 ```
 
-The named Qdrant and model-cache volumes are retained. `docker compose down -v` removes those volumes and their data.
+The named Qdrant and model-cache volumes are retained, and local uploaded/processed files remain in `storage`. To remove the Compose volumes and their data as well, use `docker compose down -v`. This permanently deletes the saved Qdrant index and downloaded model cache.
+
+## Optional: run the Python apps locally
+
+Docker Compose is the recommended setup. This alternative is useful when changing Python code. It still runs Qdrant in Docker, but runs FastAPI and Streamlit from a local Python 3.12 virtual environment.
+
+First create `.env` as described above, then run these commands from the repository root:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r requirements-backend.txt --extra-index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r requirements-frontend.txt
+docker compose up -d qdrant
+```
+
+Start the backend in one PowerShell window:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+$env:QDRANT_URL = "http://localhost:6337"
+python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+```
+
+Start the frontend in a second PowerShell window:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+$env:API_BASE_URL = "http://127.0.0.1:8000"
+python -m streamlit run frontend/ui_app.py --server.address 0.0.0.0 --server.port 8501
+```
+
+Open the local Streamlit app at [http://localhost:8501](http://localhost:8501). The `.env` file supplies the Groq settings to the backend. The PowerShell environment variables above tell the locally running services how to reach Qdrant and each other.
+
+To leave the virtual environment, run `deactivate`. To stop Qdrant, run `docker compose stop qdrant`.
 
 ## Using the API directly
 
@@ -115,6 +235,17 @@ The chat response includes the question, document ID, answer, and a `sources` li
 | `frontend/ui_app.py` | Provides the Streamlit upload and chat interface. |
 | `storage/uploads/` | Holds uploaded PDF files. |
 | `storage/processed/` | Holds extracted document text and intermediate chunk data. |
+
+## CI/CD pipeline
+
+The workflow is in `.github/workflows/ci-cd.yml` and runs for pull requests and pushes to `main`.
+
+1. **Check:** installs Ruff, checks Python style in `backend` and `frontend`, and compiles the Python files.
+2. **Build:** builds separate backend and frontend Docker images. Pull requests build without publishing images.
+3. **Publish:** pushes versioned and `latest` images to GitHub Container Registry (GHCR) for pushes to `main`.
+4. **Deploy:** on a push to `main`, a configured self-hosted GitHub Actions runner applies the Kubernetes manifests and waits for application rollouts.
+
+The workflow's check job does not run a unit-test suite. Automatic deployment requires a self-hosted runner with access to the target Kubernetes cluster and the `app-secrets` Secret already configured in the `default` namespace.
 
 ## Kubernetes on Minikube
 
@@ -152,7 +283,7 @@ kubectl port-forward --namespace monitoring svc/monitoring-kube-prometheus-prome
 
 Open the app at [http://localhost:8501](http://localhost:8501) and Grafana at [http://localhost:3001](http://localhost:3001). Grafana discovers the **Enterprise AI Knowledge Assistant** dashboard from its labeled ConfigMap. It includes backend request rate, p95 latency, status codes, health, and Loki logs. Grafana's preinstalled Kubernetes dashboards remain available as well.
 
-For Prometheus, Grafana, Loki, dashboards, and queries, see [monitoring/README.md](./monitoring/README.md).
+For Prometheus, Grafana, Loki, dashboards, and queries, see [monitoring/README.md](./enterprise-ai-knowledge-assistant/monitoring/README.md).
 
 ## Troubleshooting
 
